@@ -27,7 +27,7 @@ class MirrorReceiver : BroadcastReceiver() {
             key,
             MIRROR_NOTIFICATION_ID,
             Notification.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_launcher_parrot)
+                .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(intent.getStringExtra(EXTRA_TITLE))
                 .setContentText(intent.getStringExtra(EXTRA_TEXT))
                 .setSubText(intent.getStringExtra(EXTRA_SUBTEXT))
@@ -35,6 +35,11 @@ class MirrorReceiver : BroadcastReceiver() {
                 .setLocalOnly(true)
                 .setOnlyAlertOnce(true)
                 .setOngoing(intent.getBooleanExtra(EXTRA_ONGOING, false))
+                .addExtras(
+                    android.os.Bundle().apply {
+                        putBoolean(Notification.EXTRA_PREFER_SMALL_ICON, true)
+                    },
+                )
                 .build(),
         )
     }
