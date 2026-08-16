@@ -1,0 +1,28 @@
+<resources>
+    <string name="app_name">Parrot</string>
+    <string name="tagline">Local notification mirroring across Android users.</string>
+    <string name="source_user">Source user</string>
+    <string name="select_source_user">Select a user</string>
+    <string name="no_source_users">No full secondary users</string>
+    <string name="shizuku">Shizuku</string>
+    <string name="shizuku_permission">Shizuku permission</string>
+    <string name="listener">Cross-user listener</string>
+    <string name="notification_permission">Notification permission</string>
+    <string name="connected">Connected</string>
+    <string name="unavailable">Unavailable</string>
+    <string name="granted">Granted</string>
+    <string name="required">Required</string>
+    <string name="listening">Listening</string>
+    <string name="stopped">Stopped</string>
+    <string name="grant_shizuku">Grant Shizuku access</string>
+    <string name="start_listening">Start listening</string>
+    <string name="stop_listening">Stop listening</string>
+    <string name="grant_notification_permission">Grant notification permission</string>
+    <string name="last_notification">Last callback: %1$s</string>
+    <string name="prototype_notice">This prototype listens while this screen is open.</string>
+    <string name="mirrored_notifications">Mirrored notifications</string>
+    <string name="shizuku_permission_denied">Shizuku permission was denied.</string>
+    <string name="shizuku_unavailable">Shizuku is not running.</string>
+    <string name="shizuku_permission_required">Shizuku permission is required.</string>
+    <string name="source_user_required">Select a source user first.</string>
+</resources>
