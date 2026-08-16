@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.os.IBinder
 import android.os.Process
@@ -96,19 +97,20 @@ class ParrotUserService(private val context: Context) : IParrotService.Stub(), F
         if (notification.userId != userId) return
         runCatching {
             val extras = notification.notification.extras
+            val appName = appName(notification.packageName, userId)
             val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
-                .ifBlank { notification.packageName }
+                .ifBlank { appName }
             val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
             deliver(
                 Intent()
                     .putExtra(MirrorReceiver.EXTRA_KEY, notification.key)
                     .putExtra(MirrorReceiver.EXTRA_TITLE, title)
                     .putExtra(MirrorReceiver.EXTRA_TEXT, text)
-                    .putExtra(MirrorReceiver.EXTRA_SUBTEXT, "${notification.packageName} · user $userId")
+                    .putExtra(MirrorReceiver.EXTRA_SUBTEXT, appName)
                     .putExtra(MirrorReceiver.EXTRA_WHEN, notification.postTime)
                     .putExtra(MirrorReceiver.EXTRA_ONGOING, notification.isOngoing),
             )
-            lastNotification = "${notification.packageName}: $title"
+            lastNotification = "$appName: $title"
             error = null
         }.onFailure { error = it.message() }
     }
@@ -149,6 +151,14 @@ class ParrotUserService(private val context: Context) : IParrotService.Stub(), F
 
     private fun notificationManager(): Any =
         systemService("android.app.INotificationManager\$Stub", Context.NOTIFICATION_SERVICE)
+
+    private fun appName(packageName: String, userId: Int): String = runCatching {
+        val service = systemService("android.content.pm.IPackageManager\$Stub", "package")
+        val getApplicationInfo = service.javaClass.methods.single { it.name == "getApplicationInfo" }
+        val flags = if (getApplicationInfo.parameterTypes[1] == Long::class.javaPrimitiveType) 0L else 0
+        val info = getApplicationInfo.invoke(service, packageName, flags, userId) as ApplicationInfo
+        context.packageManager.getApplicationLabel(info).toString()
+    }.getOrDefault(packageName)
 
     private fun systemService(stubClass: String, serviceName: String): Any {
         val binder = Class.forName("android.os.ServiceManager")
