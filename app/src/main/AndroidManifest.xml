@@ -20,6 +20,10 @@
             </intent-filter>
         </activity>
 
+        <receiver
+            android:name=".MirrorReceiver"
+            android:exported="false" />
+
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"

@@ -19,10 +19,12 @@
     <string name="stop_listening">Stop listening</string>
     <string name="grant_notification_permission">Grant notification permission</string>
     <string name="last_notification">Last callback: %1$s</string>
-    <string name="prototype_notice">This prototype listens while this screen is open.</string>
+    <string name="prototype_notice">The Shizuku UserService keeps listening after this screen closes.</string>
     <string name="mirrored_notifications">Mirrored notifications</string>
     <string name="shizuku_permission_denied">Shizuku permission was denied.</string>
     <string name="shizuku_unavailable">Shizuku is not running.</string>
     <string name="shizuku_permission_required">Shizuku permission is required.</string>
+    <string name="shizuku_version_required">Shizuku 13 or newer is required.</string>
+    <string name="user_service_unavailable">UserService is not connected.</string>
     <string name="source_user_required">Select a source user first.</string>
 </resources>

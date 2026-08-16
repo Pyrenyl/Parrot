@@ -1,20 +1,21 @@
 package xyz.mufanc.parrot
 
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.os.Process
-import android.service.notification.INotificationListener
-import android.service.notification.StatusBarNotification
 import rikka.shizuku.Shizuku
-import rikka.shizuku.ShizukuBinderWrapper
 import java.lang.reflect.InvocationTargetException
+import androidx.core.content.edit
 
 data class SourceUser(val id: Int, val name: String)
 
@@ -31,20 +32,48 @@ data class MirrorState(
 class NotificationMirror(
     context: Context,
     private val onStateChanged: (MirrorState) -> Unit,
-) : FrameworkNotificationListener.Callback {
+) {
     private val context = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val notifications = context.getSystemService(NotificationManager::class.java)
     private val preferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-    private val listener = FrameworkNotificationListener(this)
-    private var manager: Any? = null
-    @Volatile private var registeredUserId: Int? = null
+    private var remote: IParrotService? = null
+    private var binding = false
     private var state = MirrorState()
+
+    private val serviceArgs = Shizuku.UserServiceArgs(
+        ComponentName(context, ParrotUserService::class.java),
+    ).daemon(true)
+        .processNameSuffix("service")
+        .tag("parrot")
+        .version(2)
+
+    private val notificationSink = PendingIntent.getBroadcast(
+        context,
+        0,
+        Intent(context, MirrorReceiver::class.java),
+        PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0,
+    )
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            binding = false
+            remote = IParrotService.Stub.asInterface(binder)
+            remote?.setNotificationSink(notificationSink)
+            syncState()
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            binding = false
+            remote = null
+            publish(state.copy(sourceUsers = emptyList(), selectedUserId = null, listening = false))
+        }
+    }
 
     private val binderReceived = Shizuku.OnBinderReceivedListener { refresh() }
     private val binderDead = Shizuku.OnBinderDeadListener {
-        manager = null
-        registeredUserId = null
+        binding = false
+        remote = null
         publish(
             state.copy(
                 shizukuConnected = false,
@@ -65,7 +94,7 @@ class NotificationMirror(
     }
 
     init {
-        notifications.createNotificationChannel(
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(
                 CHANNEL_ID,
                 context.getString(R.string.mirrored_notifications),
@@ -98,22 +127,8 @@ class NotificationMirror(
             )
             return
         }
-        runCatching { sourceUsers() }
-            .onSuccess { users ->
-                val selectedUserId = preferences.getInt(SELECTED_USER, Int.MIN_VALUE)
-                    .takeIf { selected -> users.any { it.id == selected } }
-                publish(
-                    state.copy(
-                        shizukuConnected = true,
-                        shizukuGranted = true,
-                        sourceUsers = users,
-                        selectedUserId = selectedUserId,
-                        listening = state.listening,
-                        error = null,
-                    ),
-                )
-            }
-            .onFailure(::publishError)
+        publish(state.copy(shizukuConnected = true, shizukuGranted = true, error = null))
+        if (remote != null) syncState() else bindService()
     }
 
     fun requestPermission() {
@@ -122,130 +137,89 @@ class NotificationMirror(
     }
 
     fun selectUser(userId: Int) {
-        check(!state.listening && state.sourceUsers.any { it.id == userId })
-        preferences.edit().putInt(SELECTED_USER, userId).apply()
-        publish(state.copy(selectedUserId = userId, error = null))
-    }
-
-    fun startListening() {
-        runCatching {
-            check(Shizuku.pingBinder()) { context.getString(R.string.shizuku_unavailable) }
-            check(Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
-                context.getString(R.string.shizuku_permission_required)
-            }
-            val userId = checkNotNull(state.selectedUserId) {
-                context.getString(R.string.source_user_required)
-            }
-            val service = notificationManager()
-            registeredUserId = userId
-            service.javaClass.getMethod(
-                "registerListener",
-                INotificationListener::class.java,
-                ComponentName::class.java,
-                Int::class.javaPrimitiveType,
-            ).invoke(service, listener, ComponentName(context, MainActivity::class.java), userId)
-            manager = service
-            publish(state.copy(listening = true, error = null))
-        }.onFailure {
-            registeredUserId = null
-            publishError(it)
+        runRemote { service ->
+            service.selectUser(userId)
+            preferences.edit { putInt(SELECTED_USER, userId) }
         }
     }
 
-    fun stopListening() {
-        val service = manager
-        val userId = registeredUserId
-        if (service != null && userId != null) {
-            runCatching {
-                service.javaClass.getMethod(
-                    "unregisterListener",
-                    INotificationListener::class.java,
-                    Int::class.javaPrimitiveType,
-                ).invoke(service, listener, userId)
-            }.onFailure(::publishError)
-        }
-        manager = null
-        registeredUserId = null
-        publish(state.copy(listening = false))
-    }
+    fun startListening() = runRemote(IParrotService::startListening)
+
+    fun stopListening() = runRemote(IParrotService::stopListening)
 
     fun close() {
-        stopListening()
+        if (binding || remote != null) {
+            runCatching { Shizuku.unbindUserService(serviceArgs, serviceConnection, false) }
+        }
+        binding = false
+        remote = null
         Shizuku.removeBinderReceivedListener(binderReceived)
         Shizuku.removeBinderDeadListener(binderDead)
         Shizuku.removeRequestPermissionResultListener(permissionResult)
     }
 
-    override fun onConnected() {
-        publish(state.copy(listening = true, error = null))
-    }
-
-    @Suppress("DEPRECATION")
-    override fun onPosted(notification: StatusBarNotification) {
-        val userId = registeredUserId ?: return
-        if (notification.userId != userId) return
-        mainHandler.post {
-            val extras = notification.notification.extras
-            val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
-                .ifBlank { notification.packageName }
-            val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
-            val mirrored = Notification.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_launcher_parrot)
-                .setContentTitle(title)
-                .setContentText(text)
-                .setSubText("${notification.packageName} · user $userId")
-                .setWhen(notification.postTime)
-                .setLocalOnly(true)
-                .setOnlyAlertOnce(true)
-                .setOngoing(notification.isOngoing)
-                .build()
-            notifications.notify(notification.key, MIRROR_NOTIFICATION_ID, mirrored)
-            publish(state.copy(lastNotification = "${notification.packageName}: $title", error = null))
+    private fun bindService() {
+        if (binding) return
+        runCatching {
+            check(Shizuku.getVersion() >= 13) { context.getString(R.string.shizuku_version_required) }
+            binding = true
+            Shizuku.bindUserService(serviceArgs, serviceConnection)
+        }.onFailure {
+            binding = false
+            publishError(it)
         }
     }
 
-    @Suppress("DEPRECATION")
-    override fun onRemoved(notification: StatusBarNotification) {
-        if (notification.userId == registeredUserId) {
-            notifications.cancel(notification.key, MIRROR_NOTIFICATION_ID)
-        }
+    private fun runRemote(block: (IParrotService) -> Unit) {
+        runCatching {
+            val service = checkNotNull(remote) { context.getString(R.string.user_service_unavailable) }
+            block(service)
+            syncState()
+        }.onFailure(::publishError)
     }
 
-    private fun sourceUsers(): List<SourceUser> {
-        val binder = Class.forName("android.os.ServiceManager")
-            .getMethod("getService", String::class.java)
-            .invoke(null, Context.USER_SERVICE) as IBinder
-        val service = requireNotNull(
-            Class.forName("android.os.IUserManager\$Stub")
-                .getMethod("asInterface", IBinder::class.java)
-                .invoke(null, ShizukuBinderWrapper(binder)),
-        )
-        val getUsers = service.javaClass.methods.single { it.name == "getUsers" }
-        val users = getUsers.invoke(service, *Array(getUsers.parameterCount) { true }) as List<*>
-        val currentUserId = Process.myUid() / 100_000
-        return users.mapNotNull { info ->
-            info ?: return@mapNotNull null
-            val id = info.javaClass.getField("id").getInt(info)
-            val type = info.javaClass.getField("userType").get(info) as? String
-            if (!isSelectableSourceUser(id, type, currentUserId)) return@mapNotNull null
-            SourceUser(id, (info.javaClass.getField("name").get(info) as? String).orEmpty().ifBlank { "User $id" })
-        }.sortedBy(SourceUser::id)
+    private fun syncState() {
+        runCatching {
+            val service = checkNotNull(remote)
+            var remoteState = service.state
+            val users = remoteState.sourceUsers()
+            var selectedUserId = remoteState.selectedUserId()
+            if (selectedUserId == null) {
+                preferences.getInt(SELECTED_USER, USER_NULL)
+                    .takeIf { saved -> users.any { it.id == saved } }
+                    ?.let {
+                        service.selectUser(it)
+                        remoteState = service.state
+                        selectedUserId = it
+                    }
+            } else {
+                preferences.edit { putInt(SELECTED_USER, selectedUserId!!) }
+            }
+            publish(
+                MirrorState(
+                    shizukuConnected = true,
+                    shizukuGranted = true,
+                    sourceUsers = remoteState.sourceUsers(),
+                    selectedUserId = selectedUserId,
+                    listening = remoteState.getBoolean(STATE_LISTENING),
+                    lastNotification = remoteState.getString(STATE_LAST_NOTIFICATION),
+                    error = remoteState.getString(STATE_ERROR),
+                ),
+            )
+        }.onFailure(::publishError)
     }
 
-    private fun notificationManager(): Any {
-        val binder = Class.forName("android.os.ServiceManager")
-            .getMethod("getService", String::class.java)
-            .invoke(null, Context.NOTIFICATION_SERVICE) as IBinder
-        return requireNotNull(
-            Class.forName("android.app.INotificationManager\$Stub")
-                .getMethod("asInterface", IBinder::class.java)
-                .invoke(null, ShizukuBinderWrapper(binder)),
-        )
+    private fun Bundle.sourceUsers(): List<SourceUser> {
+        val ids = getIntArray(STATE_USER_IDS) ?: intArrayOf()
+        val names = getStringArray(STATE_USER_NAMES) ?: emptyArray()
+        return ids.indices.map { index -> SourceUser(ids[index], names.getOrElse(index) { "User ${ids[index]}" }) }
     }
+
+    private fun Bundle.selectedUserId(): Int? = getInt(STATE_SELECTED_USER, USER_NULL).takeUnless { it == USER_NULL }
 
     private fun publishError(error: Throwable) {
         val cause = (error as? InvocationTargetException)?.targetException ?: error
-        publish(state.copy(error = cause.message ?: cause.javaClass.simpleName, listening = false))
+        publish(state.copy(error = cause.message ?: cause.javaClass.simpleName))
     }
 
     private fun publish(newState: MirrorState) {
@@ -261,9 +235,16 @@ class NotificationMirror(
         private const val SHIZUKU_PERMISSION_REQUEST = 1
         private const val SELECTED_USER = "selected_user"
         private const val CHANNEL_ID = "mirrored_notifications"
-        private const val MIRROR_NOTIFICATION_ID = 1
     }
 }
+
+internal const val USER_NULL = -10_000
+internal const val STATE_USER_IDS = "user_ids"
+internal const val STATE_USER_NAMES = "user_names"
+internal const val STATE_SELECTED_USER = "selected_user"
+internal const val STATE_LISTENING = "listening"
+internal const val STATE_LAST_NOTIFICATION = "last_notification"
+internal const val STATE_ERROR = "error"
 
 internal fun isSelectableSourceUser(id: Int, userType: String?, currentUserId: Int): Boolean =
     id != currentUserId && userType?.startsWith("android.os.usertype.full.") == true
