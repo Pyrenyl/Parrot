@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Bundle
 
 class MirrorReceiver : BroadcastReceiver() {
     @Suppress("DEPRECATION")
@@ -35,7 +34,7 @@ class MirrorReceiver : BroadcastReceiver() {
                 key,
                 MIRROR_NOTIFICATION_ID,
                 Notification.Builder(context, CHANNEL_ID)
-                    .setSmallIcon(R.drawable.ic_notification)
+                    .setSmallIcon(context.applicationInfo.icon)
                     .setContentTitle(intent.getStringExtra(EXTRA_TITLE))
                     .setContentText(intent.getStringExtra(EXTRA_TEXT))
                     .setSubText(intent.getStringExtra(EXTRA_SUBTEXT))
@@ -44,7 +43,6 @@ class MirrorReceiver : BroadcastReceiver() {
                     .setLocalOnly(true)
                     .setOnlyAlertOnce(true)
                     .setOngoing(intent.getBooleanExtra(EXTRA_ONGOING, false))
-                    .addExtras(preferSmallIconExtras())
                     .build(),
             )
         }
@@ -61,7 +59,7 @@ class MirrorReceiver : BroadcastReceiver() {
             SUMMARY_TAG,
             SUMMARY_NOTIFICATION_ID,
             Notification.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_notification)
+                .setSmallIcon(context.applicationInfo.icon)
                 .setContentTitle(context.getString(R.string.mirrored_notifications))
                 .setContentText(context.getString(R.string.notification_count, count))
                 .setShowWhen(false)
@@ -70,7 +68,6 @@ class MirrorReceiver : BroadcastReceiver() {
                 .setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
                 .setLocalOnly(true)
                 .setOnlyAlertOnce(true)
-                .addExtras(preferSmallIconExtras())
                 .build(),
         )
     }
@@ -89,9 +86,5 @@ class MirrorReceiver : BroadcastReceiver() {
         private const val CHANNEL_ID = "mirrored_notifications"
         private const val MIRROR_NOTIFICATION_ID = 1
         private const val SUMMARY_NOTIFICATION_ID = 2
-
-        private fun preferSmallIconExtras() = Bundle().apply {
-            putBoolean(Notification.EXTRA_PREFER_SMALL_ICON, true)
-        }
     }
 }
