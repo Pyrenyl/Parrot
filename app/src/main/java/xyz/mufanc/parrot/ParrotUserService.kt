@@ -45,13 +45,13 @@ class ParrotUserService(private val context: Context) : IParrotService.Stub(), F
             val userId = checkNotNull(selectedUserId) { "Select a source user first." }
             val service = notificationManager()
             registeredUserId = userId
+            manager = service
             service.javaClass.getMethod(
                 "registerListener",
                 INotificationListener::class.java,
                 ComponentName::class.java,
                 Int::class.javaPrimitiveType,
             ).invoke(service, listener, ComponentName(context, ParrotUserService::class.java), userId)
-            manager = service
             listening = true
             error = null
         }.onFailure {
@@ -89,44 +89,79 @@ class ParrotUserService(private val context: Context) : IParrotService.Stub(), F
 
     override fun onConnected() {
         listening = registeredUserId != null
-        error = null
+        if (listening) {
+            runCatching(::reconcile).onSuccess { error = null }.onFailure { error = it.message() }
+        }
     }
 
     override fun onPosted(notification: StatusBarNotification) {
         val userId = registeredUserId ?: return
         if (notification.userId != userId) return
+        if (notification.isSummary()) {
+            runCatching { remove(notification.key) }.onFailure { error = it.message() }
+            return
+        }
         runCatching {
-            val extras = notification.notification.extras
-            val appName = appName(notification.packageName, userId)
-            val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
-                .ifBlank { appName }
-            val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
-            deliver(
-                Intent()
-                    .putExtra(MirrorReceiver.EXTRA_KEY, notification.key)
-                    .putExtra(MirrorReceiver.EXTRA_TITLE, title)
-                    .putExtra(MirrorReceiver.EXTRA_TEXT, text)
-                    .putExtra(MirrorReceiver.EXTRA_SUBTEXT, appName)
-                    .putExtra(MirrorReceiver.EXTRA_WHEN, notification.postTime)
-                    .putExtra(MirrorReceiver.EXTRA_ONGOING, notification.isOngoing),
-            )
-            lastNotification = "$appName: $title"
+            mirror(notification, userId)
             error = null
         }.onFailure { error = it.message() }
     }
 
     override fun onRemoved(notification: StatusBarNotification) {
         if (notification.userId == registeredUserId) {
-            runCatching {
-                deliver(
-                    Intent()
-                        .putExtra(MirrorReceiver.EXTRA_KEY, notification.key)
-                        .putExtra(MirrorReceiver.EXTRA_REMOVE, true),
-                )
-            }
-                .onFailure { error = it.message() }
+            runCatching { remove(notification.key) }.onFailure { error = it.message() }
         }
     }
+
+    private fun reconcile() {
+        val userId = checkNotNull(registeredUserId)
+        val active = activeNotifications()
+            .filter { it.userId == userId && !it.isSummary() }
+        active.forEach { mirror(it, userId) }
+        deliver(
+            Intent().putExtra(
+                MirrorReceiver.EXTRA_SYNC_KEYS,
+                active.map(StatusBarNotification::getKey).toTypedArray(),
+            ),
+        )
+    }
+
+    private fun mirror(notification: StatusBarNotification, userId: Int) {
+        val extras = notification.notification.extras
+        val appName = appName(notification.packageName, userId)
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+            .ifBlank { appName }
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
+        deliver(
+            Intent()
+                .putExtra(MirrorReceiver.EXTRA_KEY, notification.key)
+                .putExtra(MirrorReceiver.EXTRA_TITLE, title)
+                .putExtra(MirrorReceiver.EXTRA_TEXT, text)
+                .putExtra(MirrorReceiver.EXTRA_SUBTEXT, appName)
+                .putExtra(MirrorReceiver.EXTRA_WHEN, notification.postTime)
+                .putExtra(MirrorReceiver.EXTRA_ONGOING, notification.isOngoing),
+        )
+        lastNotification = "$appName: $title"
+    }
+
+    private fun remove(key: String) {
+        deliver(
+            Intent()
+                .putExtra(MirrorReceiver.EXTRA_KEY, key)
+                .putExtra(MirrorReceiver.EXTRA_REMOVE, true),
+        )
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun activeNotifications(): List<StatusBarNotification> {
+        val service = checkNotNull(manager)
+        val getActive = service.javaClass.methods.single { it.name == "getActiveNotificationsFromListener" }
+        val slice = getActive.invoke(service, listener, null, 0)
+        return slice.javaClass.getMethod("getList").invoke(slice) as List<StatusBarNotification>
+    }
+
+    private fun StatusBarNotification.isSummary(): Boolean =
+        notification.flags and Notification.FLAG_GROUP_SUMMARY != 0
 
     private fun deliver(intent: Intent) {
         checkNotNull(notificationSink) { "Open Parrot once to initialize notification delivery." }

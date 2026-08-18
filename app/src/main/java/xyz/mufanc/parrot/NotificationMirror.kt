@@ -45,7 +45,7 @@ class NotificationMirror(
     ).daemon(true)
         .processNameSuffix("service")
         .tag("parrot")
-        .version(4)
+        .version(5)
 
     private val notificationSink = PendingIntent.getBroadcast(
         context,

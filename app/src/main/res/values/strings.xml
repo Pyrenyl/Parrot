@@ -21,6 +21,7 @@
     <string name="last_notification">Last callback: %1$s</string>
     <string name="prototype_notice">The Shizuku UserService keeps listening after this screen closes.</string>
     <string name="mirrored_notifications">Mirrored notifications</string>
+    <string name="notification_count">%1$d notifications</string>
     <string name="shizuku_permission_denied">Shizuku permission was denied.</string>
     <string name="shizuku_unavailable">Shizuku is not running.</string>
     <string name="shizuku_permission_required">Shizuku permission is required.</string>
