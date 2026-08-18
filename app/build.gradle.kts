@@ -3,6 +3,11 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val cfgReleaseStoreFile = providers.environmentVariable("RELEASE_STORE_FILE").orNull
+val cfgReleaseStorePassword = providers.environmentVariable("RELEASE_STORE_PASSWORD").orNull
+val cfgReleaseKeyAlias = providers.environmentVariable("RELEASE_KEY_ALIAS").orNull
+val cfgReleaseKeyPassword = providers.environmentVariable("RELEASE_KEY_PASSWORD").orNull
+
 android {
     namespace = "xyz.mufanc.parrot"
     compileSdk = 37
@@ -15,10 +20,21 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = cfgReleaseStoreFile?.let { file(it) }
+            storePassword = cfgReleaseStorePassword
+            keyAlias = cfgReleaseKeyAlias
+            keyPassword = cfgReleaseKeyPassword
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
+            vcsInfo.include = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
